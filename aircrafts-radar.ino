@@ -11,6 +11,11 @@
 TFT_eSPI tft = TFT_eSPI(); 
 #define TFT_BL 11 
 
+const int BUTTON_PIN = 9;
+// 8 = haut droite
+// 9 = bas gauche
+// 10 = bas droite
+
 const char* ssid = "Wifi-name"; 
 const char* password = "Wifi-password"; 
 
@@ -22,6 +27,44 @@ const int HEIGHT = 128;
 const int CENTER_X = 64; 
 const int CENTER_Y = 64;
 const int RADIUS = 60;  
+
+// --------------------------------------------------------
+// GESTION DU THÈME (Jour / Nuit)
+// --------------------------------------------------------
+bool isLightTheme = false;
+int buttonState = HIGH;
+int lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;
+
+// Variables de couleurs
+uint16_t color_bg;
+uint16_t color_text;
+uint16_t color_grid_main;
+uint16_t color_grid_sub;
+uint16_t color_sweep;
+uint16_t color_plane;
+uint16_t color_zero;
+
+void updateThemeColors() {
+  if (isLightTheme) {
+    color_bg = TFT_WHITE;
+    color_text = TFT_BLACK;
+    color_grid_main = tft.color565(150, 200, 150); // Vert très clair
+    color_grid_sub = TFT_LIGHTGREY;
+    color_sweep = TFT_DARKGREEN;
+    color_plane = TFT_BLUE; // Les avions bleus ressortent mieux sur fond blanc !
+    color_zero = TFT_RED;   // Le jaune est illisible sur blanc
+  } else {
+    color_bg = TFT_BLACK;
+    color_text = TFT_WHITE;
+    color_grid_main = TFT_DARKGREEN;
+    color_grid_sub = TFT_DARKGREY;
+    color_sweep = TFT_GREEN;
+    color_plane = TFT_RED;
+    color_zero = TFT_YELLOW;
+  }
+}
 
 // --------------------------------------------------------
 // CONFIGURATION API OPENSKY (Paris)
@@ -89,17 +132,20 @@ void drawAircraftTriangle(int x, int y, float heading, uint16_t color) {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\n--- DEMARRAGE RADAR DEBOGAGE ---");
   
+  // Configuration du bouton
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  updateThemeColors(); // Initialise les couleurs au démarrage
+
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
 
   tft.init();
   tft.invertDisplay(false); 
   tft.setRotation(0); 
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(color_bg);
   
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(color_text, color_bg);
   tft.drawString("Connexion WiFi...", 10, 60);
 
   WiFi.begin(ssid, password);
@@ -107,8 +153,7 @@ void setup() {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\n[WiFi] Connecté avec succès !");
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(color_bg);
 }
 
 // --------------------------------------------------------
@@ -117,18 +162,29 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  // CALL API
+  // --- GESTION DU BOUTON (Changement de thème) ---
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastButtonState) {
+    lastDebounceTime = currentMillis;
+  }
+  if ((currentMillis - lastDebounceTime) > debounceDelay) {
+    if (reading == LOW && buttonState == HIGH) { // On détecte l'appui
+      isLightTheme = !isLightTheme;
+      updateThemeColors();
+      tft.fillScreen(color_bg); // Rafraîchissement total de l'écran avec le nouveau fond
+    }
+    buttonState = reading;
+  }
+  lastButtonState = reading;
+
+  // --- CALL API ---
   if (currentMillis - lastApiUpdate >= UPDATE_INTERVAL || lastApiUpdate == 0) {
-    Serial.println("\n--- [API] Lancement du cycle de mise à jour ---");
     
     if (WiFi.status() == WL_CONNECTED) {
-      
       WiFiClientSecure client;
       client.setInsecure(); 
 
-      // Token API pour Opensky Network
       if (accessToken == "" || currentMillis - tokenFetchTime > 3600000) {
-        Serial.println("[OAuth2] Demande d'un nouveau jeton d'accès...");
         HTTPClient authHttp;
         authHttp.begin(client, "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token");
         authHttp.addHeader("Content-Type", "application/x-www-form-urlencoded");
@@ -136,58 +192,36 @@ void loop() {
         String authPayload = "grant_type=client_credentials&client_id=" + String(clientID) + "&client_secret=" + String(clientSecret);
         
         int authCode = authHttp.POST(authPayload);
-        Serial.print("[OAuth2] Code HTTP reçu : ");
-        Serial.println(authCode);
-
         if (authCode == HTTP_CODE_OK) {
           String authResponse = authHttp.getString();
           DynamicJsonDocument authDoc(8192);
           DeserializationError err = deserializeJson(authDoc, authResponse);
-          
           if (!err) {
             accessToken = authDoc["access_token"].as<String>();
             tokenFetchTime = currentMillis;
-            Serial.println("[OAuth2] Jeton récupéré avec succès !");
-          } else {
-            Serial.print("[OAuth2] Erreur décodage JSON jeton : ");
-            Serial.println(err.c_str());
           }
-        } else {
-          Serial.println("[OAuth2] ÉCHEC AUTHENTIFICATION. Vérifie impérativement ton ID et SECRET.");
-          String errResponse = authHttp.getString();
-          Serial.print("[OAuth2] Réponse serveur : ");
-          Serial.println(errResponse);
         }
         authHttp.end();
       }
 
-      // RÉCUPÉRATION DES AVIONS
       if (accessToken != "") {
-        Serial.println("[Avions] Requête des données de vol...");
         HTTPClient http;
         http.begin(client, apiUrl);
         http.setUserAgent("Mozilla/5.0 (ESP32 Radar)");
         http.addHeader("Authorization", "Bearer " + accessToken); 
         
         int httpResponseCode = http.GET();
-        Serial.print("[Avions] Code HTTP reçu : ");
-        Serial.println(httpResponseCode);
-        
         if (httpResponseCode == HTTP_CODE_OK) {
           String payload = http.getString();
-          Serial.print("[Avions] Taille des données : ");
-          Serial.print(payload.length());
-          Serial.println(" octets.");
-
           DynamicJsonDocument doc(8192); 
           DeserializationError error = deserializeJson(doc, payload);
           
           if (!error) {
             JsonArray states = doc["states"];
             
-            // Effacement des anciens triangles
+            // Effacement des anciens triangles avec la couleur de fond actuelle
             for (int i = 0; i < plane_count; i++) {
-              drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, TFT_BLACK);
+              drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, color_bg);
             }
             plane_count = 0; 
             
@@ -206,71 +240,63 @@ void loop() {
                     }
                   }
                 }
-                Serial.print("[Avions] Nombre d'avions décodés : ");
-                Serial.println(plane_count);
-            } else {
-                Serial.println("[Avions] Zone vide (states est null).");
             }
-          } else {
-            Serial.print("[Avions] Erreur de parsing JSON: ");
-            Serial.println(error.c_str());
           }
-        } else {
-          Serial.print("[Avions] Échec de la requête. Code d'erreur : ");
-          Serial.println(httpResponseCode);
         }
         http.end();
-      } else {
-        Serial.println("[Avions] Requête annulée : Pas de jeton d'accès valide.");
       }
-    } else {
-      Serial.println("[WiFi] Erreur : Déconnecté du réseau.");
     }
     lastApiUpdate = currentMillis; 
   }
 
-  // ANIMATION et DESSIN
+  // --- ANIMATION et DESSIN ---
+  
+  // Effacer l'ancienne ligne avec le fond actuel
   float old_rad = sweepAngle * PI / 180.0;
   int old_end_x = CENTER_X + RADIUS * sin(old_rad);
   int old_end_y = CENTER_Y - RADIUS * cos(old_rad);
-  tft.drawLine(CENTER_X, CENTER_Y, old_end_x, old_end_y, TFT_BLACK);
+  tft.drawLine(CENTER_X, CENTER_Y, old_end_x, old_end_y, color_bg);
 
   sweepAngle += SWEEP_SPEED;
   if (sweepAngle >= 360.0) sweepAngle = 0.0;
 
-  tft.drawCircle(CENTER_X, CENTER_Y, RADIUS, TFT_DARKGREEN);
-  tft.drawCircle(CENTER_X, CENTER_Y, (RADIUS * 2) / 3, TFT_DARKGREY); 
-  tft.drawCircle(CENTER_X, CENTER_Y, RADIUS / 3, TFT_DARKGREY);       
+  // Redessiner les cercles avec les couleurs du thème
+  tft.drawCircle(CENTER_X, CENTER_Y, RADIUS, color_grid_main);
+  tft.drawCircle(CENTER_X, CENTER_Y, (RADIUS * 2) / 3, color_grid_sub); 
+  tft.drawCircle(CENTER_X, CENTER_Y, RADIUS / 3, color_grid_sub);       
   
-  tft.drawLine(CENTER_X, 0, CENTER_X, HEIGHT, TFT_DARKGREY); 
-  tft.drawLine(0, CENTER_Y, WIDTH, CENTER_Y, TFT_DARKGREY); 
-  tft.fillCircle(CENTER_X, CENTER_Y, 2, TFT_RED); 
+  tft.drawLine(CENTER_X, 0, CENTER_X, HEIGHT, color_grid_sub); 
+  tft.drawLine(0, CENTER_Y, WIDTH, CENTER_Y, color_grid_sub); 
+  tft.fillCircle(CENTER_X, CENTER_Y, 2, color_plane); 
 
-  tft.setTextColor(TFT_WHITE, TFT_BLACK); 
+  tft.setTextColor(color_text, color_bg); 
   tft.drawString("N", CENTER_X - 2, 0);
   tft.drawString("S", CENTER_X - 2, HEIGHT - 8);
   tft.drawString("E", WIDTH - 6, CENTER_Y - 4);
   tft.drawString("W", 0, CENTER_Y - 4);
 
-  tft.setTextColor(TFT_DARKGREY);
+  tft.setTextColor(color_grid_sub, color_bg);
   int max_km = round(OFFSET * 111.0); 
   tft.drawString(String(max_km / 3) + "km", CENTER_X + 2, CENTER_Y - (RADIUS / 3) - 8); 
   tft.drawString(String((max_km * 2) / 3) + "km", CENTER_X + 8, CENTER_Y - ((RADIUS * 2) / 3) - 8);
   tft.drawString(String(max_km) + "km", CENTER_X + 15, CENTER_Y - RADIUS - 2); 
 
+  // Dessiner les avions avec la couleur du thème
   for (int i = 0; i < plane_count; i++) {
-    drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, TFT_RED);
+    drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, color_plane);
   }
 
+  // Tracer le faisceau radar
   float rad = sweepAngle * PI / 180.0;
   int end_x = CENTER_X + RADIUS * sin(rad);
   int end_y = CENTER_Y - RADIUS * cos(rad);
-  tft.drawLine(CENTER_X, CENTER_Y, end_x, end_y, TFT_GREEN);
+  tft.drawLine(CENTER_X, CENTER_Y, end_x, end_y, color_sweep);
 
+  // Affichage du nombre d'avions
   if (plane_count == 0) {
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.setTextColor(color_zero, color_bg);
   } else {
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(color_text, color_bg);
   }
   char buf[15];
   if (plane_count <= 1) {
