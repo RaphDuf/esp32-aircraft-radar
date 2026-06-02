@@ -3,9 +3,7 @@ A personnal aircraft radar to put on your desk.
 This project is based on the [opensky-network](https://opensky-network.org/) API and is deploy on an ESP32C3 with oled screen from Aliexpress (you can find it [here](https://s.click.aliexpress.com/e/_c3SxFl2d)). 
 
 ## Project result
-![img1](https://github.com/RaphDuf/esp32-aircraft-radar/blob/main/img/IMG_8326.jpeg "IMG 1" | width=100)
-![img2](https://github.com/RaphDuf/esp32-aircraft-radar/blob/main/img/IMG_8327.jpeg "IMG 2" | width=100)
-![img3](https://github.com/RaphDuf/esp32-aircraft-radar/blob/main/img/IMG_8329.jpeg "IMG 3" | width=100)
+<img src="img/IMG_8326.jpeg" alt="IMG 1" width="250"> <img src="img/IMG_8327.jpeg" alt="IMG 2" width="250"> <img src="img/IMG_8329.jpeg" alt="IMG 3" width="250">
 
 ## Library
 Like explianed in the ESP32 [documentation](https://spotpear.com/wiki/ESP32-C3-desktop-trinket-Mini-TV-Portable-Pendant-LVGL-1.44inch-LCD-ST7735.html), you need to add specific library. You can find theme [here](https://github.com/Spotpear/ESP32C3_1.44inch)
