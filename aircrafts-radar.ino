@@ -11,10 +11,9 @@
 TFT_eSPI tft = TFT_eSPI(); 
 #define TFT_BL 11 
 
-const int BUTTON_PIN = 9;
-// 8 = haut droite
-// 9 = bas gauche
-// 10 = bas droite
+const int BUTTON_THEME_PIN = 10; // Bouton bas-droite
+const int BUTTON_PAGE_PIN = 8;  // Bouton haut-droite 
+// 10 = Bouton bas-gauche
 
 const char* ssid = "Wifi-name"; 
 const char* password = "Wifi-password"; 
@@ -29,12 +28,20 @@ const int CENTER_Y = 64;
 const int RADIUS = 60;  
 
 // --------------------------------------------------------
-// GESTION DU THÈME (Jour / Nuit)
+// GESTION DU THÈME ET DES PAGES
 // --------------------------------------------------------
 bool isLightTheme = false;
-int buttonState = HIGH;
-int lastButtonState = HIGH;
-unsigned long lastDebounceTime = 0;
+int currentPage = 0; // 0 = Radar, 1 = Tableau d'affichage
+bool needRedrawList = true; 
+
+// Variables anti-rebond 
+int themeButtonState = HIGH;
+int lastThemeButtonState = HIGH;
+unsigned long lastThemeDebounceTime = 0;
+int pageButtonState = HIGH;
+int lastPageButtonState = HIGH;
+unsigned long lastPageDebounceTime = 0;
+
 unsigned long debounceDelay = 50;
 
 // Variables de couleurs
@@ -50,11 +57,11 @@ void updateThemeColors() {
   if (isLightTheme) {
     color_bg = TFT_WHITE;
     color_text = TFT_BLACK;
-    color_grid_main = tft.color565(150, 200, 150); // Vert très clair
+    color_grid_main = tft.color565(150, 200, 150); 
     color_grid_sub = TFT_LIGHTGREY;
     color_sweep = TFT_DARKGREEN;
-    color_plane = TFT_BLUE; // Les avions bleus ressortent mieux sur fond blanc !
-    color_zero = TFT_RED;   // Le jaune est illisible sur blanc
+    color_plane = TFT_BLUE; 
+    color_zero = TFT_RED;   
   } else {
     color_bg = TFT_BLACK;
     color_text = TFT_WHITE;
@@ -71,7 +78,7 @@ void updateThemeColors() {
 // --------------------------------------------------------
 const float CENTER_LAT = 48.862392;
 const float CENTER_LON = 2.467920;
-const float OFFSET = 0.15;
+const float OFFSET = 0.20;
 
 const float LAMIN = CENTER_LAT - OFFSET; 
 const float LAMAX = CENTER_LAT + OFFSET; 
@@ -92,10 +99,14 @@ unsigned long tokenFetchTime = 0;
 float sweepAngle = 0.0;
 const float SWEEP_SPEED = 4.0; 
 
+// STRUCTURE AVION 
 struct Plane {
   int x;
   int y;
   float heading;
+  String callsign;
+  int altitude;
+  int speed;
 };
 Plane planes_list[50]; 
 int plane_count = 0;
@@ -133,9 +144,11 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   
-  // Configuration du bouton
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  updateThemeColors(); // Initialise les couleurs au démarrage
+  // Configuration des boutons
+  pinMode(BUTTON_THEME_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PAGE_PIN, INPUT_PULLUP);
+  
+  updateThemeColors(); 
 
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
@@ -162,22 +175,34 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  // --- GESTION DU BOUTON (Changement de thème) ---
-  int reading = digitalRead(BUTTON_PIN);
-  if (reading != lastButtonState) {
-    lastDebounceTime = currentMillis;
-  }
-  if ((currentMillis - lastDebounceTime) > debounceDelay) {
-    if (reading == LOW && buttonState == HIGH) { // On détecte l'appui
+  // GESTION DU BOUTON THÈME 
+  int themeReading = digitalRead(BUTTON_THEME_PIN);
+  if (themeReading != lastThemeButtonState) lastThemeDebounceTime = currentMillis;
+  if ((currentMillis - lastThemeDebounceTime) > debounceDelay) {
+    if (themeReading == LOW && themeButtonState == HIGH) { 
       isLightTheme = !isLightTheme;
       updateThemeColors();
-      tft.fillScreen(color_bg); // Rafraîchissement total de l'écran avec le nouveau fond
+      tft.fillScreen(color_bg); 
+      needRedrawList = true; // Force la liste à se redessiner
     }
-    buttonState = reading;
+    themeButtonState = themeReading;
   }
-  lastButtonState = reading;
+  lastThemeButtonState = themeReading;
 
-  // --- CALL API ---
+  // GESTION DU BOUTON PAGE 
+  int pageReading = digitalRead(BUTTON_PAGE_PIN);
+  if (pageReading != lastPageButtonState) lastPageDebounceTime = currentMillis;
+  if ((currentMillis - lastPageDebounceTime) > debounceDelay) {
+    if (pageReading == LOW && pageButtonState == HIGH) { 
+      currentPage = (currentPage == 0) ? 1 : 0; // Bascule entre 0 et 1
+      tft.fillScreen(color_bg);
+      needRedrawList = true; 
+    }
+    pageButtonState = pageReading;
+  }
+  lastPageButtonState = pageReading;
+
+  // CALL API
   if (currentMillis - lastApiUpdate >= UPDATE_INTERVAL || lastApiUpdate == 0) {
     
     if (WiFi.status() == WL_CONNECTED) {
@@ -219,9 +244,11 @@ void loop() {
           if (!error) {
             JsonArray states = doc["states"];
             
-            // Effacement des anciens triangles avec la couleur de fond actuelle
-            for (int i = 0; i < plane_count; i++) {
-              drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, color_bg);
+            // Effacement des anciens triangles sur le radar
+            if (currentPage == 0) {
+              for (int i = 0; i < plane_count; i++) {
+                drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, color_bg);
+              }
             }
             plane_count = 0; 
             
@@ -231,16 +258,39 @@ void loop() {
                     float lon = state[5].isNull() ? 0.0 : state[5].as<float>(); 
                     float lat = state[6].isNull() ? 0.0 : state[6].as<float>(); 
                     float heading = state[10].isNull() ? 0.0 : state[10].as<float>();
+                    bool onGround = state[8].isNull() ? false : state[8].as<bool>();
                     
-                    if (lon != 0.0 && lat != 0.0) {
+                    if (lon != 0.0 && lat != 0.0 && !onGround) {
                       planes_list[plane_count].x = mapFloat(lon, LOMIN, LOMAX, 0, WIDTH);
                       planes_list[plane_count].y = mapFloat(lat, LAMIN, LAMAX, HEIGHT, 0);
                       planes_list[plane_count].heading = heading;
+                      
+                      // MISE A JOUR DU TABLEAU 
+                      String callsign = state[1].isNull() ? "????" : state[1].as<String>();
+                      callsign.trim(); // Enlève les espaces inutiles
+                      if(callsign == "") callsign = "Inconnu";
+                      planes_list[plane_count].callsign = callsign;
+                      
+                      planes_list[plane_count].altitude = state[7].isNull() ? 0 : (int)state[7].as<float>();
+                      // Convertion de la vitesse de m/s à km/h
+                      planes_list[plane_count].speed = state[9].isNull() ? 0 : (int)(state[9].as<float>() * 3.6);
+                      
                       plane_count++;
                     }
                   }
                 }
+                // Tri par vitesse de vol
+                for (int i = 0; i < plane_count - 1; i++) {
+                  for (int j = i + 1; j < plane_count; j++) {
+                    if (planes_list[j].speed > planes_list[i].speed) {
+                      Plane temp = planes_list[i];
+                      planes_list[i] = planes_list[j];
+                      planes_list[j] = temp;
+                    }
+                  }
+                }
             }
+            needRedrawList = true; // Refresh du tableau
           }
         }
         http.end();
@@ -249,65 +299,102 @@ void loop() {
     lastApiUpdate = currentMillis; 
   }
 
-  // --- ANIMATION et DESSIN ---
+  // ANIMATION et DESSIN
   
-  // Effacer l'ancienne ligne avec le fond actuel
-  float old_rad = sweepAngle * PI / 180.0;
-  int old_end_x = CENTER_X + RADIUS * sin(old_rad);
-  int old_end_y = CENTER_Y - RADIUS * cos(old_rad);
-  tft.drawLine(CENTER_X, CENTER_Y, old_end_x, old_end_y, color_bg);
+  if (currentPage == 0) {
+    // ==========================================
+    // PAGE 0 : LE RADAR
+    // ==========================================
+    float old_rad = sweepAngle * PI / 180.0;
+    int old_end_x = CENTER_X + RADIUS * sin(old_rad);
+    int old_end_y = CENTER_Y - RADIUS * cos(old_rad);
+    tft.drawLine(CENTER_X, CENTER_Y, old_end_x, old_end_y, color_bg);
 
-  sweepAngle += SWEEP_SPEED;
-  if (sweepAngle >= 360.0) sweepAngle = 0.0;
+    sweepAngle += SWEEP_SPEED;
+    if (sweepAngle >= 360.0) sweepAngle = 0.0;
 
-  // Redessiner les cercles avec les couleurs du thème
-  tft.drawCircle(CENTER_X, CENTER_Y, RADIUS, color_grid_main);
-  tft.drawCircle(CENTER_X, CENTER_Y, (RADIUS * 2) / 3, color_grid_sub); 
-  tft.drawCircle(CENTER_X, CENTER_Y, RADIUS / 3, color_grid_sub);       
-  
-  tft.drawLine(CENTER_X, 0, CENTER_X, HEIGHT, color_grid_sub); 
-  tft.drawLine(0, CENTER_Y, WIDTH, CENTER_Y, color_grid_sub); 
-  tft.fillCircle(CENTER_X, CENTER_Y, 2, color_plane); 
+    tft.drawCircle(CENTER_X, CENTER_Y, RADIUS, color_grid_main);
+    tft.drawCircle(CENTER_X, CENTER_Y, (RADIUS * 2) / 3, color_grid_sub); 
+    tft.drawCircle(CENTER_X, CENTER_Y, RADIUS / 3, color_grid_sub);       
+    
+    tft.drawLine(CENTER_X, 0, CENTER_X, HEIGHT, color_grid_sub); 
+    tft.drawLine(0, CENTER_Y, WIDTH, CENTER_Y, color_grid_sub); 
+    tft.fillCircle(CENTER_X, CENTER_Y, 2, color_plane); 
 
-  tft.setTextColor(color_text, color_bg); 
-  tft.drawString("N", CENTER_X - 2, 0);
-  tft.drawString("S", CENTER_X - 2, HEIGHT - 8);
-  tft.drawString("E", WIDTH - 6, CENTER_Y - 4);
-  tft.drawString("W", 0, CENTER_Y - 4);
+    tft.setTextColor(color_text, color_bg); 
+    tft.drawString("N", CENTER_X - 2, 0);
+    tft.drawString("S", CENTER_X - 2, HEIGHT - 8);
+    tft.drawString("E", WIDTH - 6, CENTER_Y - 4);
+    tft.drawString("W", 0, CENTER_Y - 4);
 
-  tft.setTextColor(color_grid_sub, color_bg);
-  int max_km = round(OFFSET * 111.0); 
-  tft.drawString(String(max_km / 3) + "km", CENTER_X + 2, CENTER_Y - (RADIUS / 3) - 8); 
-  tft.drawString(String((max_km * 2) / 3) + "km", CENTER_X + 8, CENTER_Y - ((RADIUS * 2) / 3) - 8);
-  tft.drawString(String(max_km) + "km", CENTER_X + 15, CENTER_Y - RADIUS - 2); 
+    tft.setTextColor(color_grid_sub, color_bg);
+    int max_km = round(OFFSET * 111.0); 
+    tft.drawString(String(max_km / 3) + "km", CENTER_X + 2, CENTER_Y - (RADIUS / 3) - 8); 
+    tft.drawString(String((max_km * 2) / 3) + "km", CENTER_X + 8, CENTER_Y - ((RADIUS * 2) / 3) - 8);
+    tft.drawString(String(max_km) + "km", CENTER_X + 15, CENTER_Y - RADIUS - 2); 
 
-  // Dessiner les avions avec la couleur du thème
-  for (int i = 0; i < plane_count; i++) {
-    drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, color_plane);
-  }
+    for (int i = 0; i < plane_count; i++) {
+      drawAircraftTriangle(planes_list[i].x, planes_list[i].y, planes_list[i].heading, color_plane);
+    }
 
-  // Tracer le faisceau radar
-  float rad = sweepAngle * PI / 180.0;
-  int end_x = CENTER_X + RADIUS * sin(rad);
-  int end_y = CENTER_Y - RADIUS * cos(rad);
-  tft.drawLine(CENTER_X, CENTER_Y, end_x, end_y, color_sweep);
+    float rad = sweepAngle * PI / 180.0;
+    int end_x = CENTER_X + RADIUS * sin(rad);
+    int end_y = CENTER_Y - RADIUS * cos(rad);
+    tft.drawLine(CENTER_X, CENTER_Y, end_x, end_y, color_sweep);
 
-  // Affichage du nombre d'avions
-  if (plane_count == 0) {
-    tft.setTextColor(color_zero, color_bg);
-  } else {
-    tft.setTextColor(color_text, color_bg);
-  }
-  char buf[15];
-  if (plane_count <= 1) {
-    sprintf(buf, "%d avion   ", plane_count); 
-  } else {
-    sprintf(buf, "%d avions ", plane_count);
-  }
-  if (plane_count < 10) {
-    tft.drawString(buf, 80, 115); 
-  } else {
-    tft.drawString(buf, 75, 115); 
+    if (plane_count == 0) {
+      tft.setTextColor(color_zero, color_bg);
+    } else {
+      tft.setTextColor(color_text, color_bg);
+    }
+    char buf[15];
+    if (plane_count <= 1) {
+      sprintf(buf, "%d avion   ", plane_count); 
+    } else {
+      sprintf(buf, "%d avions ", plane_count);
+    }
+    if (plane_count < 10) {
+      tft.drawString(buf, 80, 115); 
+    } else {
+      tft.drawString(buf, 75, 115); 
+    }
+    
+  } else if (currentPage == 1) {
+    // ==========================================
+    // PAGE 1 : LE TABLEAU D'AFFICHAGE
+    // ==========================================
+    if (needRedrawList) {
+      tft.fillScreen(color_bg);
+      
+      // En-tête du tableau
+      tft.setTextColor(color_grid_sub, color_bg);
+      tft.drawString("VOL", 0, 5);
+      tft.drawString("ALT.", 55, 5);
+      tft.drawString("KM/H", 95, 5);
+      tft.drawLine(0, 15, 128, 15, color_grid_sub); // Ligne de séparation
+
+      // Liste des avions
+      int yOffset = 20; // Marge de 20 pixels en haut
+      
+      if (plane_count == 0) {
+        tft.setTextColor(color_zero, color_bg);
+        tft.drawString("Aucun vol detecte", 10, 40);
+      } else {
+        // Maximum 10 lignes
+        for (int i = 0; i < plane_count && i < 10; i++) {
+          
+          tft.setTextColor(color_plane, color_bg);
+          tft.drawString(planes_list[i].callsign, 0, yOffset);
+          
+          tft.setTextColor(color_text, color_bg);
+          tft.drawString(String(planes_list[i].altitude) + "m", 55, yOffset);
+          tft.drawString(String(planes_list[i].speed), 95, yOffset);
+          
+          yOffset += 10; // On descend d'une ligne
+        }
+      }
+      needRedrawList = false; // Attente de la prochaine mise à jour API
+    }
   }
 
   delay(15); 
