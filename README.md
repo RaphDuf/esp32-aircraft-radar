@@ -3,7 +3,7 @@ A personnal aircraft radar to put on your desk.
 This project is based on the [opensky-network](https://opensky-network.org/) API and is deploy on an ESP32C3 with oled screen from Aliexpress (you can find it [here](https://s.click.aliexpress.com/e/_c3SxFl2d)). 
 
 ## Project result
-<img src="img/IMG_8326.jpeg" alt="IMG 1" height="250"> <img src="img/IMG_8327.jpeg" alt="IMG 2" height="250"> <img src="img/IMG_8329.jpeg" alt="IMG 3" height="250">
+<img src="img/IMG_8326.jpeg" alt="IMG 1" height="250"> <img src="img/IMG_8327.jpeg" alt="IMG 2" height="250"> <img src="img/IMG_8329.jpeg" alt="IMG 3" height="250"> 
 After connecting to the wifi, the first page appears with the radar interface. If you click on the top-riht button, it switch to a second page (a table with more info). If you use the bottom-right button, it change the theme. 
 
 ## Library
