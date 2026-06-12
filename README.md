@@ -10,6 +10,7 @@ After connecting to the wifi, the first page appears with the radar interface. I
 
 ## Library
 Like explianed in the ESP32 [documentation](https://spotpear.com/wiki/ESP32-C3-desktop-trinket-Mini-TV-Portable-Pendant-LVGL-1.44inch-LCD-ST7735.html), you need to add specific library. You can find theme [here](https://github.com/Spotpear/ESP32C3_1.44inch)
+You also need another board manager. Add this link ```https://espressif.github.io/arduino-esp32/package_esp32_index.json``` in Files->Preferences. Then, in Tools->Board->Boards manager : download "esp32 by Espressif Systems". 
 
 ## Configuration 
 All the configuration is done at the beginning of the script. 
