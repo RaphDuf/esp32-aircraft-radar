@@ -15,11 +15,23 @@ const int BUTTON_THEME_PIN = 10; // Bouton bas-droite
 const int BUTTON_PAGE_PIN = 8;  // Bouton haut-droite 
 // 10 = Bouton bas-gauche
 
-const char* ssid = "Wifi-name"; 
-const char* password = "Wifi-password"; 
+// LISTE DES RÉSEAUX WIFI
+struct WifiNetwork {
+  const char* ssid;
+  const char* password;
+};
 
-const char* clientID = "opensky-network-clientID";
-const char* clientSecret = "opensky-network-secret";
+// déclarer les réseaux :
+WifiNetwork wifiNetworks[] = {
+  {"aaaa", "xxxxxx"},
+  {"bbbbb", "xxxxxx"},
+  ...
+};
+const int numWifiNetworks = sizeof(wifiNetworks) / sizeof(WifiNetwork);
+
+// IDENTIFIANTS API
+const char* clientID = "api-client";
+const char* clientSecret = "api-secret";
 
 const int WIDTH = 128;
 const int HEIGHT = 128;
@@ -159,13 +171,48 @@ void setup() {
   tft.fillScreen(color_bg);
   
   tft.setTextColor(color_text, color_bg);
-  tft.drawString("Connexion WiFi...", 10, 60);
+  tft.drawString("Connexion WiFi...", 10, 50);
 
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // BOUCLE DE CONNEXION MULTI-WIFI
+  bool connected = false;
+
+  while (!connected) {
+    for (int i = 0; i < numWifiNetworks; i++) {
+      Serial.print("\nEssai de connexion a : ");
+      Serial.println(wifiNetworks[i].ssid);
+      
+      // Affichage du nom du réseau testé sur l'écran
+      tft.fillRect(0, 65, 128, 20, color_bg); // Efface l'ancien texte
+      tft.drawString(wifiNetworks[i].ssid, 10, 65);
+
+      WiFi.begin(wifiNetworks[i].ssid, wifiNetworks[i].password);
+      
+      // On attend 10 secondes (20 essais x 500ms) pour ce réseau
+      int attempts = 0;
+      while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+      }
+
+      // Vérification du succès
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n[WiFi] Connecte avec succes !");
+        connected = true;
+        break; // Force la sortie de la boucle 'for'
+      } else {
+        Serial.println("\n[WiFi] Echec. Passage au reseau suivant.");
+      }
+    }
+    
+    if (!connected) {
+      Serial.println("\nAucun WiFi disponible. Nouvelle tentative dans 5 secondes...");
+      tft.fillRect(0, 65, 128, 20, color_bg);
+      tft.drawString("Echec. Retry...", 10, 65);
+      delay(5000);
+    }
   }
+
   tft.fillScreen(color_bg);
 }
 
